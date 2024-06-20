@@ -1,5 +1,5 @@
 require('dotenv').config();
-const mongoose = require('mongoose');
+const mongoose = require('./database');
 const { Client, IntentsBitField, GatewayIntentBits, ActivityType, EmbedBuilder, GuildMemberFlags, GuildMessages} = require('discord.js');
 const { Handler } = require("discordutility");
 const cooldowns = {};
