@@ -69,14 +69,18 @@ module.exports = Mining;
 // Connect to the database
 (async () => {
   try {
-          await mongoose.connect(process.env.MONGODB_URI);
-          console.log('Connected to MongoDB!');
-      
-          eventHandler(client);
+    const nasIpAddress = '192.168.129.41'; // Replace with your NAS IP address or hostname
+    const port = '27017'; // Replace with your MongoDB port (default is 27017)
+    const databaseName = 'autodb'; // Replace with your database name
+
+    await mongoose.connect(`mongodb://${nasIpAddress}:${port}/${databaseName}`);
+    console.log('Connected to MongoDB on NAS!');
+
+    eventHandler(client);
   } catch (error) {
-      console.log(`Error: ${error}`);
+    console.log(`Error: ${error}`);
   }
-  })();
+})();
 
 // Start the bot
 
