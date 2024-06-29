@@ -12,6 +12,8 @@ const readline = require("readline");
 const ms = require("ms"); // npm install ms package
 const discordToken = process.env.DISCORD_TOKEN;
 
+
+
 const client = new Client({
   intents: [
     IntentsBitField.Flags.Guilds,
@@ -40,28 +42,35 @@ async function connectToDatabase() {
 
 connectToDatabase();
 
-// Database userSchema
+// Define the user schema
 const userSchema = new mongoose.Schema({
-  userId: String,
+  userId: { type: String, required: true, unique: true },
   username: String,
   discriminator: String,
   level: { type: Number, default: 1 },
   experience: { type: Number, default: 0 },
   coins: { type: Number, default: 0 },
-  lastDailyReward: { type: Date, default: null },
-  inventory: { type: Map, of: Number, default: () => new Map([["wood", 0]]) },
+  inventory: {
+    wood: { type: Number, default: 0 },
+    apple: { type: Number, default: 0 },
+    diamond: { type: Number, default: 0 },
+    fish: { type: Number, default: 0 },
+    puffer: { type: Number, default: 0 },
+  },
+  lastDailyReward: Date,
 });
-
-const User = mongoose.model("User", userSchema);
 
 const miningSchema = new mongoose.Schema({
   userId: String,
   lastMining: { type: Date, default: null },
   lastChopping: { type: Date, default: null },
+  lastFishing: { type: Date, default: null },
   totalMined: { type: Number, default: 0 },
   totalChopped: { type: Number, default: 0 },
+  totalFished: { type: Number, default: 0},
 });
 
+const User = mongoose.model("User", userSchema);
 const Mining = mongoose.model("Mining", miningSchema);
 
 // Create an interface for reading from the terminal
@@ -127,11 +136,10 @@ client.on("messageCreate", async (message) => {
 
 // Command handler
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+  if (!message.content.startsWith("auto")) return;
 
-  // Convert the message content to lowercase
-  const command = parseCommand(message.content);
-
+  const args = message.content.slice(4).trim().split(/ +/);
+  const command = args.shift().toLowerCase();
 
   // Help command
   if (command === "help") {
@@ -142,24 +150,32 @@ client.on("messageCreate", async (message) => {
       .addFields(
         { name: "⚒️  Support Server", value: "https://discord.gg/ZhcrPTHPQA" },
         { name: " ", value: " " },
-        { name: "🔩 Utility", value: "`ping` `status` `help`", inline: true },
+        { name: "🔩 Utility", value: "`ping`  `status`  `help`", inline: true },
         { name: " ", value: " " },
         {
           name: "🏦 Leveling",
-          value: "`level` `lb` `leaderboard`",
+          value: "`level`  `lb`  `leaderboard`",
           inline: false,
         },
         { name: " ", value: " " },
         {
           name: "💸 Economy",
           value:
-            "`bal` `donate` `daily` `rich` `baltop` `automine` `autochop` ",
+            "`bal`  `donate`  `daily`  `rich`  `baltop`  `prices`",
           inline: false,
         },
-        { name: "🎒 User ", 
-          value: " `sell` `bag`",
+        { name: " ", value: " " },
+        { name: "🎒 User", 
+          value: " `sell`  `bag`",
           inline: false,
-        }
+        },
+        { name: " ", value: " " },
+        {
+          name: "🏢 Jobs",
+          value:
+            " `mine`  `chop`  `fish`",
+          inline: false,
+        },
       );
     message.channel.send({ embeds: [helpembed] });
   }
@@ -184,7 +200,7 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    message.channel.send(`Your current level is ${user.level}`);
+    message.channel.send(`${message.author}, Your current level is ${user.level}`);
   }
 
   if (command === "leaderboard" || command === "lb") {
@@ -226,7 +242,7 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    message.channel.send(`Your current balance is ${user.coins} 🪙 coins.`);
+    message.channel.send(`${message.author}, Your current balance is ${user.coins} 🪙 coins.`);
   }
 
   if (command.startsWith("donate ")) {
@@ -270,7 +286,7 @@ client.on("messageCreate", async (message) => {
     await receiver.save();
 
     message.channel.send(
-      `You have donated ${amount} 🪙 coins to ${targetUser}.`
+      `${message.author}, You have donated ${amount} 🪙 coins to ${targetUser}.`
     );
   }
 
@@ -301,7 +317,7 @@ client.on("messageCreate", async (message) => {
         let hoursLeft = Math.floor(timeLeft / 3600);
         let minutesLeft = Math.floor((timeLeft % 3600) / 60);
         message.channel.send(
-          `🕞 **Damn!** Try again in **${hoursLeft}** hour(s) and **${minutesLeft}** min.`
+          `${message.author}, You can claim your daily reward in ${hoursLeft} hour(s) and ${minutesLeft} min.`
         );
         return;
       }
@@ -333,7 +349,7 @@ client.on("messageCreate", async (message) => {
       );
 
       const now = Date.now();
-      const cooldownTime = 2 * 60 * 1000; // 2 minutes in milliseconds
+      const cooldownTime = 1 * 60 * 1000; // 1 minute in milliseconds
 
       if (
         mining.lastMining &&
@@ -342,7 +358,7 @@ client.on("messageCreate", async (message) => {
         const timeLeft =
           (mining.lastMining.getTime() + cooldownTime - now) / 1000;
         message.channel.send(
-          `You can mine again in ${timeLeft.toFixed(1)} seconds.`
+          `${message.author}, You can mine again in ${timeLeft.toFixed(1)} seconds.`
         );
         return;
       }
@@ -351,7 +367,7 @@ client.on("messageCreate", async (message) => {
       const coinsMined = Math.floor(Math.random() * 10) + 1; // Random amount between 1 and 10
       const experienceGained = Math.floor(Math.random() * 5) + 1; // Random amount between 1 and 5
 
-      const user = await User.findOneAndUpdate(
+      let user = await User.findOneAndUpdate(
         { userId: message.author.id },
         {
           $inc: { coins: coinsMined, experience: experienceGained },
@@ -359,11 +375,31 @@ client.on("messageCreate", async (message) => {
         { new: true }
       );
 
+      if (!user) {
+        user = new User({
+          userId: message.author.id,
+          username: message.author.username,
+          discriminator: message.author.discriminator,
+        });
+      }
+
+      // Add drop chance for a diamond
+      const dropChance = Math.random();
+      if (dropChance < 0.1) {
+        const diamondsDropped = Math.floor(Math.random() * 1) + 1; // Random amount between 1 and 1
+        user.inventory.diamond += diamondsDropped;
+        message.channel.send(
+          `💎 ${message.author}, You found ${diamondsDropped} diamond(s) while mining!`
+        );
+      }
+
+      await user.save();
+
       mining.lastMining = new Date();
       await mining.save();
 
       message.channel.send(
-        `⛏️ You mined ${coinsMined} 🪙 coins and gained ${experienceGained} XP! `
+        `⛏️ ${message.author}, You mined ${coinsMined} coins and gained ${experienceGained} XP!.`
       );
     } catch (error) {
       console.error("Error mining:", error);
@@ -382,16 +418,16 @@ client.on("messageCreate", async (message) => {
       );
 
       const now = Date.now();
-      const choppingCooldownTime = 5 * 60 * 1000; // 5 minutes in milliseconds
+      const cooldownTime = 1 * 60 * 1000; // 1 minute in milliseconds
 
       if (
         mining.lastChopping &&
-        now < mining.lastChopping.getTime() + choppingCooldownTime
+        now < mining.lastChopping.getTime() + cooldownTime
       ) {
         const timeLeft =
-          (mining.lastChopping.getTime() + choppingCooldownTime - now) / 1000;
+          (mining.lastChopping.getTime() + cooldownTime - now) / 1000;
         message.channel.send(
-          `You can chop again in ${timeLeft.toFixed(1)} seconds.`
+          `${message.author}, You can chop again in ${timeLeft.toFixed(1)} seconds.`
         );
         return;
       }
@@ -416,7 +452,17 @@ client.on("messageCreate", async (message) => {
         });
       }
 
-      user.inventory.set("wood", user.inventory.get("wood") + woodChopped);
+      // Add drop chance for an apple
+      const dropChance = Math.random();
+      if (dropChance < 0.2) {
+        const applesDropped = Math.floor(Math.random() * 2) + 1; // Random amount between 1 and 2
+        user.inventory.apple += applesDropped;
+        message.channel.send(
+          `🍎 ${message.author}, You found ${applesDropped} apple(s) while chopping!`
+        );
+      }
+
+      user.inventory.wood += woodChopped;
 
       await user.save();
 
@@ -424,7 +470,7 @@ client.on("messageCreate", async (message) => {
       await mining.save();
 
       message.channel.send(
-        `🌳 You chopped ${woodChopped} piece(s) of wood and gained ${experienceGained} XP! You can sell your wood with \`autosell wood\`.`
+        `🌳${message.author}, You chopped ${woodChopped} piece(s) of wood and gained ${experienceGained} XP! You can sell your wood with \`autosell wood\`.`
       );
     } catch (error) {
       console.error("Error chopping:", error);
@@ -434,65 +480,201 @@ client.on("messageCreate", async (message) => {
     }
   }
 
-  if (command === "sell wood") {
-    const user = await User.findOne({ userId: message.author.id });
+  if (command === "fish") {
+    try {
+      const mining = await Mining.findOneAndUpdate(
+        { userId: message.author.id },
+        {},
+        { upsert: true, new: true }
+      );
 
-    if (!user) {
-      message.channel.send("You have not sent any messages yet.");
-      return;
+      const now = Date.now();
+      const cooldownTime = 1 * 60 * 1000; // 1 minute in milliseconds
+
+      if (
+        mining.lastFishing &&
+        now < mining.lastFishing.getTime() + cooldownTime
+      ) {
+        const timeLeft =
+          (mining.lastFishing.getTime() + cooldownTime - now) / 1000;
+        message.channel.send(
+          `${message.author}, You can fish again in ${timeLeft.toFixed(1)} seconds.`
+        );
+        return;
+      }
+
+      // Catch Fish and XP
+      const fishCatched = Math.floor(Math.random() * 4) + 1; // Random amount between 1 and 3
+      const experienceGained = Math.floor(Math.random() * 3) + 1; // Random amount between 5 and 30
+
+      let user = await User.findOneAndUpdate(
+        { userId: message.author.id },
+        {
+          $inc: { fish: fishCatched, experience: experienceGained },
+        },
+        { new: true }
+      );
+
+      if (!user) {
+        user = new User({
+          userId: message.author.id,
+          username: message.author.username,
+          discriminator: message.author.discriminator,
+        });
+      }
+
+      // Add drop chance for puffers and shark (soon)
+      const dropChance = Math.random();
+      if (dropChance < 0.2) {
+        const puffersDropped = Math.floor(Math.random() * 2) + 1; // Random amount between 1 and 2
+        user.inventory.puffer += puffersDropped;
+        message.channel.send(
+          `🐡 ${message.author}, You found ${puffersDropped} puffer(s) while fishing!`
+        );
+      }
+
+      user.inventory.fish += fishCatched;
+
+      await user.save();
+
+      mining.lastFishing = new Date();
+      await mining.save();
+
+      message.channel.send(
+        `🐟 ${message.author}, You fished ${fishCatched} fish and gained ${experienceGained} XP! You can sell your fish with \`autosell fish\`.`
+      );
+    } catch (error) {
+      console.error("Error chopping:", error);
+      message.channel.send(
+        "An error occurred while chopping. Please try again later."
+      );
     }
-
-    const woodAmount = user.inventory.get("wood");
-
-    if (woodAmount <= 0) {
-      message.channel.send("You do not have any wood to sell.");
-      return;
-    }
-
-    // Assuming each piece of wood is sold for 10 coins
-    const coinsEarned = woodAmount * 10;
-
-    user.inventory.set("wood", 0);
-    user.coins += coinsEarned;
-
-    await user.save();
-
-    message.channel.send(
-      `You have sold ${woodAmount} pieces of wood for ${coinsEarned} 🪙 coins.`
-    );
   }
 
   if (command === "bag") {
     const user = await User.findOne({ userId: message.author.id });
+
+    if (!user) {
+      message.channel.send("You have not sent any messages yet.");
+      return;
+    }
+
+    const itemTypes = {
+      "wood": "🌳 Wood",
+      "apple": "🍎 Apple",
+      "diamond": "💎 Diamond",
+      "fish": "🐟 Fish",
+      "puffer": " 🐡 Puffer",
+    };
+
+    let inventoryMessage = `**${message.author}'s Inventory**\n`;
+
+    for (const [item, amount] of Object.entries(user.inventory)) {
+      if (amount > 0) {
+        inventoryMessage += `${itemTypes[item] ? itemTypes[item] : item} - ${amount}\n`;
+      }
+    }
+
+    if (inventoryMessage === `**${message.author}'s Inventory**\n`) {
+      inventoryMessage += `${message.author}, Your inventory is empty.`;
+    }
+
+    message.channel.send(inventoryMessage);
+  }
+
+  if (command === "prices") {
+    const itemPrices = {
+      "🌳 Wood": 5,
+      "🍎 Apple": 20,
+      "💎 Diamond": 150,
+      "🐟 Fish": 10,
+      "🐡 Puffer": 100,
+    };
+
+    let pricesMessage = "**Item Prices**\n";
+
+    for (const [item, price] of Object.entries(itemPrices)) {
+      pricesMessage += `${item}: ${price} 🪙\n`;
+    }
+
+    message.channel.send(pricesMessage);
+  }
+
+  if (command.startsWith("sell")) {
+    const args = message.content.slice(9).trim().split(/ +/); // Adjust slice index to correctly handle the command
+    const itemToSell = args[0];
+    let amountToSell = args[1];
+  
+    //// console.log(`Command args:`, args); // Debugging: log the parsed arguments
+  
+    if (!itemToSell) {
+      message.channel.send(
+        `${message.author}, Please provide an item to sell. For example: \`autosell wood 5\`.`
+      );
+      return;
+    }
+  
+    const user = await User.findOne({ userId: message.author.id });
   
     if (!user) {
       message.channel.send("You have not sent any messages yet.");
       return;
     }
   
-    const inventoryItems = Array.from(user.inventory.entries());
-    let inventoryMessage = `**🎒 ${message.author.username}'s Backpack:**\n`;
+    let itemAmount = user.inventory[itemToSell];
+    // // console.log(`User inventory:`, user.inventory); // Debugging: log the user's inventory
+    let itemPrice = 0;
+    let itemMessage = "";
   
-    if (inventoryItems.length === 0) {
-      inventoryMessage += "Your inventory is empty.\n";
+    if (itemToSell === "wood") {
+      itemPrice = 5; // Assuming each piece of wood is sold for 5 coins
+      itemMessage = "🌳 Wood";
+    } else if (itemToSell === "apple") {
+      itemPrice = 20; // Assuming each apple is sold for 20 coins
+      itemMessage = "🍎 Apple";
+    } else if (itemToSell === "diamond") {
+      itemPrice = 120; // Assuming each diamond is sold for 120 coins
+      itemMessage = "💎 Diamond";
+    } else if (itemToSell === "fish") {
+      itemPrice = 10; // Assuming each apple is sold for 20 coins
+      itemMessage = "🐟 Fish";
+    } else if (itemToSell === "puffer") {
+      itemPrice = 100; // Assuming each apple is sold for 20 coins
+      itemMessage = "🐡 Puffer";
     } else {
-      inventoryMessage += "\n";
-      inventoryItems.forEach(([item, quantity]) => {
-        if (item === "wood") {
-          inventoryMessage += `🌳 Wood : ${quantity}\n`;
-        } else {
-          inventoryMessage += `${item}: ${quantity}\n`;
-        }
-      });
+      message.channel.send(
+        `${message.author}, Please provide a valid item to sell.`
+      );
+      return;
     }
   
-    message.channel.send(inventoryMessage);
+    if (!itemAmount || itemAmount <= 0) {
+      message.channel.send(`${message.author}, You do not have any ${itemMessage} to sell.`);
+      return;
+    }
+  
+    if (amountToSell === 'all') {
+      amountToSell = itemAmount;
+    } else {
+      amountToSell = parseInt(amountToSell);
+      if (!amountToSell || isNaN(amountToSell) || amountToSell <= 0 || amountToSell > itemAmount) {
+        message.channel.send(
+          `${message.author}, Please provide a valid amount of ${itemMessage} to sell.`
+        );
+        return;
+      }
+    }
+  
+    const coinsEarned = amountToSell * itemPrice;
+  
+    user.inventory[itemToSell] -= amountToSell;
+    user.coins += coinsEarned;
+  
+    await user.save();
+  
+    message.channel.send(
+      `${message.author} has sold ${amountToSell} ${itemMessage}(s) for ${coinsEarned} 🪙 coins.`
+    );
   }
 
 });
-
-// Function to parse and normalize the command
-function parseCommand(messageContent) {
-  const command = messageContent.toLowerCase().replace("auto", "");
-  return command;
-}
